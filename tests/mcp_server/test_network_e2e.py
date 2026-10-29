@@ -112,7 +112,7 @@ async def test_request_bodies_off_on_off_with_xhr_popup_redaction_and_browser_is
         try:
             async with asyncio.timeout(30):
                 while True:
-                    output = success(await call("main", "browser_network", {"include_bodies": True}))
+                    output = success(await call("main", "browser_network", {"include_bodies": True, "include_headers": True}))
                     assert COOKIE not in output and AUTHORIZATION not in output
                     data = json.loads(output)
                     matches = [row for row in data["entries"] if row["url"] == url + path
