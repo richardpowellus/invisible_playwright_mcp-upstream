@@ -9,7 +9,7 @@ import threading
 import pytest
 from mcp import types
 
-from invisible_playwright_mcp.mcp import network, server
+from invisible_playwright_mcp.mcp import server
 from invisible_playwright_mcp.mcp.work import Work
 
 pytestmark = pytest.mark.e2e
@@ -85,7 +85,7 @@ xhr.send();
         thread.join()
 
 
-async def test_request_bodies_off_on_off_with_xhr_popup_redaction_and_browser_isolation(
+async def test_request_bodies_xhr_popup_redaction_and_browser_isolation_with_no_route(
         site, monkeypatch, tmp_path):
     url, observed = site
     for name in ("STEALTHFOX_PROFILE_DIR", "STEALTHFOX_PROXY", "STEALTHFOX_SEED",
@@ -141,9 +141,11 @@ async def test_request_bodies_off_on_off_with_xhr_popup_redaction_and_browser_is
         assert json.loads(observed["/EventOccurred"][0]["body"]) == POST
         assert COOKIE in observed["/Recalc"]["Cookie"]
         assert data["dropped"] == 0 and data["capacity"] == 500
-        assert data["request_bodies"] is False
-        assert "post_data" not in post
-        assert post["post_data_state"] == network.REQUEST_BODIES_HINT
+        assert "request_bodies" not in data
+        # The engine gives a request's body with no route (invisible-playwright
+        # 0.37.0), so it is recorded passively and nothing intercepts.
+        assert post["post_data"] == observed["/EventOccurred"][0]["body"].decode()
+        assert post["post_data_state"] == "captured"
         for row, resource_type in ((document, "document"), (post, "fetch"), (xhr, "xhr")):
             assert row["resource_type"] == resource_type
             assert row["response_body_state"] == "captured", row
@@ -151,29 +153,11 @@ async def test_request_bodies_off_on_off_with_xhr_popup_redaction_and_browser_is
         assert json.loads(xhr["response_body"]) == {"result": "read"}
         assert len(observed["/EventOccurred"]) == 1, observed["requests"]
 
-        enabled = success(await call("main", "browser_network_capture", {"request_bodies": True}))
-        assert json.loads(enabled) == {"request_bodies": True}
-        success(await call("main", "browser_network_capture", {"request_bodies": True}))
         success(await call("main", "browser_navigate", {"url": url, "wait_until": "networkidle"}))
-        captured, data = await read_complete("EventOccurred", since_id=post["id"])
-        assert data["request_bodies"] is True
-        assert captured["post_data"] == observed["/EventOccurred"][1]["body"].decode()
-        assert json.loads(captured["post_data"]) == POST
-        assert captured["status"] == 201
-        assert captured["response_body_state"] == "captured"
-        assert json.loads(captured["response_body"]) == {"result": "booked"}
-        assert len(observed["/EventOccurred"]) == 2, observed["requests"]
-
-        disabled = success(await call("main", "browser_network_capture", {"request_bodies": False}))
-        assert json.loads(disabled) == {"request_bodies": False}
-        success(await call("main", "browser_network_capture", {"request_bodies": False}))
-        success(await call("main", "browser_navigate", {"url": url, "wait_until": "networkidle"}))
-        third, data = await read_complete("EventOccurred", since_id=captured["id"])
-        assert data["request_bodies"] is False
-        assert "post_data" not in third and third["post_data_state"] == network.REQUEST_BODIES_HINT
-        assert third["status"] == 201 and third["response_body_state"] == "captured"
-        assert json.loads(third["response_body"]) == {"result": "booked"}
-        assert len(observed["/EventOccurred"]) == 3, json.dumps({
+        second, data = await read_complete("EventOccurred", since_id=post["id"])
+        assert json.loads(second["post_data"]) == POST
+        assert second["status"] == 201 and second["response_body_state"] == "captured"
+        assert len(observed["/EventOccurred"]) == 2, json.dumps({
             "requests": observed["requests"],
             "entries": [(row["id"], row["method"], row["url"]) for row in data["entries"]],
         })
@@ -181,22 +165,16 @@ async def test_request_bodies_off_on_off_with_xhr_popup_redaction_and_browser_is
         filtered = json.loads(success(await call("main", "browser_network", {
             "url_contains": "EventOccurred", "resource_types": ["fetch"], "include_bodies": True,
         })))
-        assert [row["id"] for row in filtered["entries"]] == [
-            post["id"], captured["id"], third["id"]]
-        assert json.loads(filtered["entries"][1]["post_data"]) == POST
+        assert [row["id"] for row in filtered["entries"]] == [post["id"], second["id"]]
 
         missing = await call("support", "browser_network")
         assert missing.isError
         success(await call("support", "browser_open"))
         own = json.loads(success(await call("support", "browser_network")))
         assert not any(row["url"].startswith(url) for row in own["entries"])
-        assert own["request_bodies"] is False
-        success(await call("main", "browser_network_capture", {"request_bodies": True}))
-        success(await call("support", "browser_network_capture", {"request_bodies": False}))
         success(await call("support", "browser_network_clear"))
         own = json.loads(success(await call("main", "browser_network")))
         assert any(row["id"] == post["id"] and row["url"] == post["url"] for row in own["entries"])
-        assert own["request_bodies"] is True
         success(await call("support", "browser_close"))
 
         summary = success(await call("main", "browser_network"))
@@ -211,9 +189,9 @@ async def test_request_bodies_off_on_off_with_xhr_popup_redaction_and_browser_is
         success(await call("main", "browser_navigate", {"url": url + "ExecuteAction"}))
         after, _ = await read_complete("ExecuteAction")
         assert after["id"] > child["id"]
-        success(await call("main", "browser_network_capture", {"request_bodies": True}))
         success(await call("main", "browser_close"))
         success(await call("main", "browser_open"))
-        assert json.loads(success(await call("main", "browser_network")))["request_bodies"] is False
+        fresh = json.loads(success(await call("main", "browser_network")))
+        assert not any(row["url"].startswith(url) for row in fresh["entries"])
     finally:
         await work.close_all()

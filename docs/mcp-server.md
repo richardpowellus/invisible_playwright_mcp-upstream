@@ -172,7 +172,7 @@ a browser gets when nobody says anything.
 `browser_take_screenshot`, `browser_watch`, `browser_click`, `browser_click_at`,
 `browser_type`, `browser_select_option`, `browser_press_key`,
 `browser_upload_files`, `browser_evaluate`,
-`browser_network`, `browser_network_clear`, `browser_network_capture`.
+`browser_network`, `browser_network_clear`.
 
 Tool names mirror the Microsoft Playwright MCP, so prompts written for it work
 here too, with one deliberate departure: **there are no tab tools.** Three
@@ -320,14 +320,13 @@ that was asked for.
 | `browser_read_html` | `mode`: `form` (default), `text`, `full` | The page's HTML reduced to what is worth reading: `form` keeps the interactive surface and the text explaining it, `text` the prose alone, `full` the structure with the noise removed. Not capped, on purpose: cutting markup in the middle leaves tags that mean nothing, so on a large page the answer is long. |
 | `browser_take_screenshot` | none | A screenshot of the page, as an image. |
 | `browser_watch` | none | The whole browser window as a person at the machine sees it: tab strip, address bar, page and the pointer, from a live capture the session keeps running on the active tab. A capture that stops delivering, as it does when a headed window is minimised, is started again on the next look; if the window cannot be captured the tool says so rather than answering an old picture. |
-| `browser_network` | `url_contains=null`, `resource_types=null`, `since_id=null`, `include_bodies=false`, `max_entries=50` | Network entries, oldest-first, with `next_since_id`, lifetime eviction count `dropped`, capacity, byte caps and current `request_bodies` mode. No request is sent or replayed. |
-| `browser_network_clear` | none | Clears only this browser's captured history and pending body reads. Recording and request-body mode continue, IDs are never reused, and the lifetime eviction count remains. Does not touch the page. |
-| `browser_network_capture` | `request_bodies` (required boolean) | Enables/disables request-body capture using one unchanged pass-through route for this browser. Off by default, idempotent, and independent of other browsers. |
+| `browser_network` | `url_contains=null`, `resource_types=null`, `since_id=null`, `include_bodies=false`, `max_entries=50` | Network entries, oldest-first, with `next_since_id`, lifetime eviction count `dropped`, capacity and byte caps. No request is sent or replayed. |
+| `browser_network_clear` | none | Clears only this browser's captured history and pending body reads. Recording continues, IDs are never reused, and the lifetime eviction count remains. Does not touch the page. |
 
 Network recording starts when the browser opens, before its first navigation.
 BrowserContext listeners cover every page, including pages the site opens.
-By default there is no interception. No mode injects scripts, evaluates page
-code, or modifies requests.
+There is no interception: nothing injects scripts, evaluates page code, routes
+or modifies requests.
 History is memory-only, separate for each browser, and discarded on
 close. Cookie, Set-Cookie, Authorization and Proxy-Authorization header values
 are replaced with `[redacted]` at capture time, case-insensitively.
@@ -348,22 +347,10 @@ buffers or Python object overhead. The engine's `response.body()` API returns
 a complete body before it can be truncated; concurrent reads, not transient
 engine allocations, are bounded.
 
-**Request bodies are opt-in.** Firefox-36 exposes POST/PUT bodies only while
-interception is on. Call `browser_network_capture(request_bodies=true)` before
-the interaction to record them, then `browser_network_capture(request_bodies=false)`
-when done. While on, every request in this browser, including site-opened pages,
-passes through the engine. Pages cannot see the route from JavaScript, but the
-HTTP cache is bypassed and requests are slightly slower. The handler only
-falls through to other routes/the network (`fallback`, or `continue_` on engines
-without it); it never modifies, fulfils or aborts a request. A failed pass-through
-is logged, never retried. Disabling removes only this capture handler, not other
-routes. Existing captured bodies remain until cleared/evicted/closed.
-
-The top-level `request_bodies` flag reports the current mode, which resets on
-browser close/reopen. Missing request bodies recorded while off carry a
-`post_data_state` hint naming the opt-in tool; enabling later cannot recover
-earlier bodies. Route registration failures are tool errors containing the
-engine's original message, with capture mode unchanged. Correct resource types
+**Request bodies are passive too.** The engine reports a request's POST/PUT
+body with no route (invisible-playwright 0.37.0), so it is recorded like any
+other field. A body the engine does not expose carries a reason in
+`post_data_state` rather than reading as empty. Correct resource types
 and response-body selection depend on
 [invisible_playwright#305](https://github.com/feder-cr/invisible_playwright/pull/305),
 which maps Juggler's `TYPE_DOCUMENT`, `TYPE_XMLHTTPREQUEST` and `TYPE_FETCH`
